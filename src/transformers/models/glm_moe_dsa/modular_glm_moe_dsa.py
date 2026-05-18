@@ -25,7 +25,6 @@ from ...masking_utils import create_causal_mask
 from ...modeling_flash_attention_utils import FlashAttentionKwargs
 from ...modeling_outputs import BaseModelOutputWithPast
 from ...modeling_utils import ALL_ATTENTION_FUNCTIONS
-from ...models.llama.modeling_llama import rotate_half
 from ...processing_utils import Unpack
 from ...utils import TransformersKwargs, auto_docstring, logging
 from ...utils.generic import is_flash_attention_requested
@@ -67,13 +66,14 @@ def apply_rotary_pos_emb(
     Returns:
         `torch.Tensor`: Tensor with rotary embeddings applied, same shape as input.
     """
-    cos = cos.unsqueeze(unsqueeze_dim)
-    sin = sin.unsqueeze(unsqueeze_dim)
-
-    # Split-half (NeoX/Llama style): (x[:d/2], x[d/2:])
-    # This matches llama's apply_rotary_pos_emb logic.
-    x_rotated = (x * cos) + (rotate_half(x) * sin)
-    return x_rotated
+    # Interleaved (GPT-J style): (x[0], x[1]), (x[2], x[3]), ...
+    # RotaryEmbedding outputs cos/sin with repeated halves for NeoX compatibility,
+    # while interleaved rotation expects [.., D/2] frequencies.
+    cos = cos[..., : x.shape[-1] // 2].unsqueeze(unsqueeze_dim)
+    sin = sin[..., : x.shape[-1] // 2].unsqueeze(unsqueeze_dim)
+    x1 = x[..., ::2]
+    x2 = x[..., 1::2]
+    return torch.stack((x1 * cos - x2 * sin, x2 * cos + x1 * sin), dim=-1).flatten(-2)
 
 
 @auto_docstring(checkpoint="zai-org/GLM-5")

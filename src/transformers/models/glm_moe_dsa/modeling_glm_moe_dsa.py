@@ -64,12 +64,6 @@ class GlmMoeDsaRMSNorm(nn.Module):
         return f"{tuple(self.weight.shape)}, eps={self.variance_epsilon}"
 
 
-def rotate_half(x):
-    """Rotates half the hidden dims of the input."""
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
-    return torch.cat((-x2, x1), dim=-1)
-
 
 def apply_rotary_pos_emb(
     x: torch.Tensor,
@@ -93,13 +87,15 @@ def apply_rotary_pos_emb(
     Returns:
         `torch.Tensor`: Tensor with rotary embeddings applied, same shape as input.
     """
-    cos = cos.unsqueeze(unsqueeze_dim)
-    sin = sin.unsqueeze(unsqueeze_dim)
+    # Interleaved (GPT-J style): (x[0], x[1]), (x[2], x[3]), ...
+    # RotaryEmbedding outputs cos/sin with repeated halves for NeoX compatibility,
+    # while interleaved rotation expects [.., D/2] frequencies.
+    cos = cos[..., : x.shape[-1] // 2].unsqueeze(unsqueeze_dim)
+    sin = sin[..., : x.shape[-1] // 2].unsqueeze(unsqueeze_dim)
+    x1 = x[..., ::2]
+    x2 = x[..., 1::2]
+    return torch.stack((x1 * cos - x2 * sin, x2 * cos + x1 * sin), dim=-1).flatten(-2)
 
-    # Split-half (NeoX/Llama style): (x[:d/2], x[d/2:])
-    # This matches llama's apply_rotary_pos_emb logic.
-    x_rotated = (x * cos) + (rotate_half(x) * sin)
-    return x_rotated
 
 
 class GlmMoeDsaIndexer(nn.Module):
